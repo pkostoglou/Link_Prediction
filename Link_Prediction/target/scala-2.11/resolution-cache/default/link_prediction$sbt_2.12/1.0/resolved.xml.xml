@@ -4,7 +4,7 @@
 		module="link_prediction$sbt_2.12"
 		revision="1.0"
 		status="integration"
-		publication="20190105191212"
+		publication="20190106154459"
 	/>
 	<configurations>
 		<conf name="compile" visibility="public" description=""/>
