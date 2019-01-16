@@ -1,20 +1,18 @@
 import org.apache.log4j.{Level, Logger}
 import org.apache.spark.storage.StorageLevel
 import org.apache.spark.sql.types.IntegerType
-import org.apache.spark.ml.classification.LogisticRegression
-import org.apache.spark.ml.feature.{HashingTF, IDF, Tokenizer,Normalizer}
+import org.apache.spark.ml.classification.{DecisionTreeClassifier, LinearSVC, LogisticRegression, RandomForestClassifier}
+import org.apache.spark.ml.feature.{HashingTF, IDF, Normalizer, Tokenizer}
 import org.apache.spark.ml.linalg.Vector
 import org.apache.spark
 import org.apache.spark.ml.Pipeline
 import org.apache.spark.sql.{DataFrame, SparkSession}
-import org.apache.spark.sql.functions.{split,udf,concat_ws}
+import org.apache.spark.sql.functions.{concat_ws, split, udf}
 import org.apache.spark.ml.feature.VectorAssembler
-import org.apache.spark.ml.classification.DecisionTreeClassifier
 import org.apache.spark.ml.evaluation.MulticlassClassificationEvaluator
 import org.apache.spark.ml.regression.DecisionTreeRegressionModel
 import org.apache.spark.ml.regression.DecisionTreeRegressor
 import org.apache.spark.ml.evaluation.RegressionEvaluator
-import org.apache.spark.ml.classification.LinearSVC
 import org.apache.spark.ml.feature.MinMaxScaler
 
 
@@ -29,19 +27,26 @@ object Classification {
     return temp1.zip(temp2).map(x=>x._1*x._2).reduce((a,b)=>a+b)
   }
 
+
+  def jaccard(vec1: Vector , vec2: Vector):Double= {
+    val temp1 = vec1.toArray
+    val temp2 = vec2.toArray
+    return 1-temp1.intersect(temp2).size/temp1.union(temp2).size
+  }
   def sameAuthor(auth1: String,auth2: String):Int={
     if(auth1==null || auth2 ==null)
       return 0
     val temp1=auth1.split(",")
     val temp2=auth2.split(",")
+    var sameAuthors=0
     for( i <- 0 until temp1.length){
       for(j <-0 until temp2.length){
         if(temp1(i).compareTo(temp2(j))==0){
-          return 1
+          sameAuthors=sameAuthors+1
         }
       }
     }
-    return 0
+    return sameAuthors
   }
 
   def sameJournal(Journal1: String,Journal2: String):Int={
@@ -105,17 +110,20 @@ object Classification {
 
       //join the information for every node with id=Id1 rename column names and change the type of column label from string to Int
       val test=dfComSplit.join(NodeInfo,$"Id1"===$"Id").select($"Id1",$"Id2",$"label",$"fAbstract".as("fAbstract1"),
-        $"Authors".as("Authors1"),$"fTitle".as("Title1"),$"Journal".as("Journal1"))
-        .withColumn("label",dfComSplit.col("label").cast(IntegerType))
+          $"Authors".as("Authors1"),$"fTitle".as("Title1"),$"Journal".as("Journal1"))
+          .withColumn("label",dfComSplit.col("label").cast(IntegerType))
       //join the information for every node with id=Id2 rename column names
       val lastDf=test.join(NodeInfo,$"Id2"===$"Id").select($"Id1",$"Id2",$"label",$"fAbstract1", $"Authors1",$"Title1",$"Journal1",
         $"fAbstract".as("fAbstract2"),$"Authors".as("Authors2"),$"fTitle".as("Title2"),$"Journal".as("Journal2"))
       val dist = udf(sqrdist _ )
+      val dist2 = udf(jaccard _ )
       val sAuthor= udf(sameAuthor _)
       val sJournal = udf(sameJournal _ )
       //produce final dataframe calculate euclidean distance between abstracts and check if there is the same author between 2 articles
-      val finalDf=lastDf.withColumn("Dist",dist($"fAbstract1",$"fAbstract2"))
-        .withColumn("DistTitle",dist($"Title1",$"Title2"))
+      val finalDf=lastDf.withColumn("Dist",dist2($"fAbstract1",$"fAbstract2"))
+        .withColumn("DistTitle",dist2($"Title1",$"Title2"))
+        //.withColumn("DistTitle2", dist($"Title1",$"Title2"))
+        //.withColumn("Dist2",dist($"fAbstract1",$"fAbstract2"))
         .withColumn("sameAuthors",sAuthor($"Authors1",$"Authors2"))
         .withColumn("Id",concat_ws(" ",$"Id1",$"Id2"))
         .withColumn("sameJournal", sJournal($"Journal1",$"Journal2"))
@@ -144,14 +152,22 @@ object Classification {
     val assembledFinalDf = assembler1.transform(ProcessedDf).select("Id","features","label")
 
     //split the training for train and test
-    val Array(training, test) = assembledFinalDf.randomSplit(Array[Double](0.7, 0.3), 18)
+    val Array(training, test) = assembledFinalDf.randomSplit(Array[Double](0.4, 0.6), 18)
 
-    //decision tree model
+
+    val rf = new RandomForestClassifier()
+      .setLabelCol("label")
+      .setFeaturesCol("features")
+      .setNumTrees(3)
+
+    val trained=rf.fit(training)
+    val prediction=trained.transform(test)
+    /*decision tree model
     val dt = new DecisionTreeClassifier()
       .setLabelCol("label")
       .setFeaturesCol("features")
     val trained=dt.fit(training)
-    val prediction=trained.transform(test)
+    val prediction=trained.transform(test)*/
     val evaluator = new MulticlassClassificationEvaluator()
       .setLabelCol("label")
       .setPredictionCol("prediction")
@@ -178,7 +194,6 @@ object Classification {
       .setMetricName("accuracy")
     val accuracy = evaluator.evaluate(prediction)
     println(s"Test acc = ${accuracy}")*/
-
 
   }
 }
