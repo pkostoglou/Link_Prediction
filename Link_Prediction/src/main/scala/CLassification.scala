@@ -33,6 +33,7 @@ object Classification {
     val temp2 = vec2.toArray
     return 1-temp1.intersect(temp2).size/temp1.union(temp2).size
   }
+
   def sameAuthor(auth1: String,auth2: String):Int={
     if(auth1==null || auth2 ==null)
       return 0
@@ -56,8 +57,11 @@ object Classification {
     if(Journal1.compareTo(Journal2)==0){
       return 1
     }
-
     return 0
+  }
+
+  def YearDifference(Year1: Int, Year2: Int):Int={
+    return math.abs(Year1 - Year2)
   }
 
 
@@ -110,24 +114,26 @@ object Classification {
 
       //join the information for every node with id=Id1 rename column names and change the type of column label from string to Int
       val test=dfComSplit.join(NodeInfo,$"Id1"===$"Id").select($"Id1",$"Id2",$"label",$"fAbstract".as("fAbstract1"),
-          $"Authors".as("Authors1"),$"fTitle".as("Title1"),$"Journal".as("Journal1"))
+          $"Authors".as("Authors1"),$"fTitle".as("Title1"),$"Journal".as("Journal1"),$"Year".as("Year1"))
           .withColumn("label",dfComSplit.col("label").cast(IntegerType))
       //join the information for every node with id=Id2 rename column names
-      val lastDf=test.join(NodeInfo,$"Id2"===$"Id").select($"Id1",$"Id2",$"label",$"fAbstract1", $"Authors1",$"Title1",$"Journal1",
-        $"fAbstract".as("fAbstract2"),$"Authors".as("Authors2"),$"fTitle".as("Title2"),$"Journal".as("Journal2"))
+      val lastDf=test.join(NodeInfo,$"Id2"===$"Id").select($"Id1",$"Id2",$"label",$"fAbstract1", $"Authors1",$"Title1",$"Journal1",$"Year1",
+        $"fAbstract".as("fAbstract2"),$"Authors".as("Authors2"),$"fTitle".as("Title2"),$"Journal".as("Journal2"),$"Year".as("Year2"))
       val dist = udf(sqrdist _ )
-      val dist2 = udf(jaccard _ )
+      // val dist2 = udf(jaccard _ )
       val sAuthor= udf(sameAuthor _)
       val sJournal = udf(sameJournal _ )
+      val difYear = udf(YearDifference _ )
       //produce final dataframe calculate euclidean distance between abstracts and check if there is the same author between 2 articles
-      val finalDf=lastDf.withColumn("Dist",dist2($"fAbstract1",$"fAbstract2"))
-        .withColumn("DistTitle",dist2($"Title1",$"Title2"))
-        //.withColumn("DistTitle2", dist($"Title1",$"Title2"))
-        //.withColumn("Dist2",dist($"fAbstract1",$"fAbstract2"))
+      val finalDf=lastDf.withColumn("Dist",dist($"fAbstract1",$"fAbstract2"))
+        .withColumn("DistTitle",dist($"Title1",$"Title2"))
+        .withColumn("YearDifference",difYear($"Year1",$"Year2"))
+        //.withColumn("DistTitle2", dist2($"Title1",$"Title2"))
+        //.withColumn("Dist2",dist2($"fAbstract1",$"fAbstract2"))
         .withColumn("sameAuthors",sAuthor($"Authors1",$"Authors2"))
         .withColumn("Id",concat_ws(" ",$"Id1",$"Id2"))
         .withColumn("sameJournal", sJournal($"Journal1",$"Journal2"))
-        .select("Id","label","Dist","DistTitle","sameAuthors","sameJournal")
+        .select("Id","label","Dist","DistTitle","sameAuthors","sameJournal","YearDifference")
       //dataframe's last form is Id,label,Euclidean distance,same authors
       return finalDf
 
@@ -144,10 +150,10 @@ object Classification {
       .setOutputCol("features")
       .setP(1.0)*/
 
-    val assembler1 = new VectorAssembler().
-      setInputCols(Array("Dist","DistTitle","sameAuthors","sameJournal")).
-      setOutputCol("features")
 
+    val assembler1 = new VectorAssembler().
+      setInputCols(Array("Dist","DistTitle","sameAuthors","sameJournal","YearDifference")).
+      setOutputCol("features")
 
     val assembledFinalDf = assembler1.transform(ProcessedDf).select("Id","features","label")
 
