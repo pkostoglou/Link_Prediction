@@ -8,6 +8,8 @@ import org.apache.spark.sql.functions.{concat_ws, split, udf}
 import org.apache.spark.ml.linalg.Vectors
 import org.apache.spark.sql.types.IntegerType
 import org.apache.spark.storage.StorageLevel
+import org.apache.spark.ml.feature.MinHashLSH
+
 
 
 
@@ -127,14 +129,20 @@ object Link_Prediction_Part2 {
       //i=i+1
     //}
 //val predictions=assembledDf
-    val brp = new BucketedRandomProjectionLSH()
+    /*val brp = new BucketedRandomProjectionLSH()
       .setBucketLength(1.0)
       .setNumHashTables(1)
       //.setInputCol("fAbstract")
       //.setInputCol("fTitle")
       .setInputCol("hashVector")
       .setOutputCol("hashes")
-    val model = brp.fit(predictions)
+    val model = brp.fit(predictions)*/
+
+    val mh = new MinHashLSH()
+      .setNumHashTables(15)
+      .setInputCol("hashVector")
+      .setOutputCol("hashes")
+    val model = mh.fit(predictions)
 
     // Feature Transformation
     println("The hashed dataset where hashed values are stored in the column 'hashes':")
@@ -144,7 +152,7 @@ object Link_Prediction_Part2 {
     val setLabel = udf(setlabel _)
     val getDst = udf(getDstId _)
     val getSrc = udf(getSrcId _)
-    val c=model.approxSimilarityJoin(hashedDf, hashedDf, 9.0, "EuclideanDistance")
+    val c=model.approxSimilarityJoin(hashedDf, hashedDf, 0.7, "EuclideanDistance")
       .select($"datasetA.Id".alias("idA"),
         $"datasetB.Id".alias("idB"),
         $"datasetA.prediction".alias("clusterA"),
