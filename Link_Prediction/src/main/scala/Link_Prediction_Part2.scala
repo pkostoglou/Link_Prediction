@@ -176,16 +176,16 @@ object Link_Prediction_Part2 {
     val groundTruth = sparkSession.read.format("csv").option("header", "false").load("Data-20181224/Cit-HepTh.txt").toDF("Id").withColumn("_tmp", split($"Id", "\t")).select(
       $"_tmp".getItem(0).as("Id1"),
       $"_tmp".getItem(1).as("Id2")).drop("_tmp")
-    groundTruth.show()
+    //groundTruth.show()
     val allEdges=groundTruth.count()
     val evaluation=groundTruth.join(c,($"IdSrc"===$"Id1"&&$"IdDst"===$"Id2"))
     val setRight=evaluation.filter($"label"===1).count()
-    println(c.count(),evaluation.count)
+   // println(c.count(),evaluation.count)
     println(setRight,allEdges)
     val recall = (setRight).toDouble / allEdges
-      println(recall)
+      //println(recall)
     val precision = (setRight).toDouble/myRight
-    println(precision)
+    //println(precision)
     println(2*precision*recall/(precision+recall))
 
 

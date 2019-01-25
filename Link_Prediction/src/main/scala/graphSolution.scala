@@ -135,7 +135,7 @@ object graphSolution {
       $"_tmp".getItem(2).as("label")
     ).drop("_tmp")//.limit(1000)
 
-    val dfNodeInfoProstemp=TFIDF(dfNodeInformation,"Abstract","fAbstract",20000).drop("Abstract")
+    val dfNodeInfoProstemp=TFIDF(dfNodeInformation,"Abstract","fAbstract",2000).drop("Abstract")
 
 
     val tokenizer = new Tokenizer().setInputCol("Title").setOutputCol("words")
@@ -150,15 +150,24 @@ object graphSolution {
 
     val result = model2Vec.transform(w)
 
-    val Array(train, testing) = dfComSplit.limit(10000).randomSplit(Array[Double](0.8, 0.2), 18)
-    println(train.count(),testing.count())
+    //val Array(train, testing) = dfComSplit.limit(1000).randomSplit(Array[Double](0.8, 0.2), 18)
+    //println(train.count(),testing.count())
 
     val users: RDD[(VertexId, (Int,String, String,Vector,Vector))] = result.rdd.map(x=>(x.getString(0).toLong,(x.getString(1).toInt,x.getString(3),x.getString(4),x.getAs[Vector](5),x.getAs[Vector](7))))
-    val edgesTrain = train.rdd.map(x => Edge(x.getString(0).toLong, x.getString(1).toLong,x.getString(2).toInt))
+    val edgesTrain = dfComSplit.rdd.map(x => Edge(x.getString(0).toLong, x.getString(1).toLong,x.getString(2).toInt))
+    val dftest = sparkSession.read.format("csv").option("header", "false").load("Data-20181224/training_set.txt").toDF("info")
+
+    val dfComSplitTest = df2.withColumn("_tmp", split($"info", " ")).select(
+      $"_tmp".getItem(0).as("Id1"),
+      $"_tmp".getItem(1).as("Id2"),
+      $"_tmp".getItem(2).as("label")
+    ).drop("_tmp")//.limit(5000)
+
+    val allEdges = dfComSplitTest.rdd.map(x=> Edge(x.getString(0).toLong, x.getString(1).toLong,2)) ++ edgesTrain
     //val edgesTest = testing.rdd.map(x=> Edge(x.getString(0).toLong, x.getString(1).toLong,2))
     //val edges = edgesTest++edgesTrain
     val u=VertexRDD(users)
-    val graph = Graph(u,edgesTrain)
+    val graph = Graph(u,allEdges)
 
 
     val newAttributes: VertexRDD[(Int, String,String,Vector,Vector,Array[Long],Int)] = graph.aggregateMessages[(Int,String, String,Vector,Vector,Array[Long],Int)](
@@ -166,14 +175,14 @@ object graphSolution {
         if(triplet.attr==1) {
           triplet.sendToSrc((triplet.srcAttr._1, triplet.srcAttr._2, triplet.srcAttr._3, triplet.srcAttr._4,triplet.srcAttr._5, Array(triplet.dstId),0))
           triplet.sendToDst((triplet.dstAttr._1, triplet.dstAttr._2, triplet.dstAttr._3, triplet.dstAttr._4,triplet.dstAttr._5, Array(triplet.srcId),1))
-        }else if(triplet.attr==0){
+        }else if(triplet.attr==0 || triplet.attr==2){
           triplet.sendToSrc((triplet.srcAttr._1, triplet.srcAttr._2, triplet.srcAttr._3, triplet.srcAttr._4,triplet.srcAttr._5, Array[Long](),0))
           triplet.sendToDst((triplet.dstAttr._1, triplet.dstAttr._2, triplet.dstAttr._3, triplet.dstAttr._4,triplet.dstAttr._5, Array[Long](),0))
         }
       },
       (a,b)=>(a._1,a._2,a._3,a._4,a._5,a._6++b._6,a._7+b._7)
     )
-    val updatedGraph=Graph(newAttributes,edgesTrain)
+    val updatedGraph=Graph(newAttributes,allEdges)
     val facts=updatedGraph.triplets
     val readyRDD= facts.map(x=>(Row(x.srcId,x.srcAttr._1,x.srcAttr._2,x.srcAttr._3,x.srcAttr._4,x.srcAttr._5,x.srcAttr._6,x.srcAttr._7
       ,x.dstId,x.dstAttr._1,x.dstAttr._2,x.dstAttr._3,x.dstAttr._4,x.dstAttr._5,x.dstAttr._6,x.dstAttr._7,x.attr)))
@@ -218,15 +227,22 @@ object graphSolution {
       .withColumn("LinksDifference",inLinksDif($"InLinks2",$"InLinks1"))
       .select("Id","label","YearDifference","Dist","DistTitle","sameNeighbours","LinksDifference")
 
-    finalDf.show()
+    finalDf.persist(StorageLevel.MEMORY_AND_DISK)
+
+    //finalDf.show()
+    val trainingDf = finalDf.filter($"label"=!=2)
+    val testingDf = finalDf.filter($"label"===2)
+    //trainingDf.show()
+    //testingDf.show()
     val assembler1 = new VectorAssembler().
       setInputCols(Array("Dist","sameNeighbours","YearDifference","DistTitle","LinksDifference")).
       setOutputCol("featuresTemp")
 
     //"Dist","DistTitle","sameAuthors","sameJournal","YearDifference","sameNeighbours"
 
-    val assembledFinalDf = assembler1.transform(finalDf).select("Id","featuresTemp","label")
+    val assembledFinalDf = assembler1.transform(trainingDf).select("Id","featuresTemp","label")
 
+    print("mid")
     import org.apache.spark.ml.feature.Normalizer
     val scaler = new Normalizer()
       .setInputCol("featuresTemp")
@@ -257,72 +273,19 @@ object graphSolution {
 
     val trained=rf.fit(scaledData)
 
-    val edgesTest = testing.rdd.map(x=> Edge(x.getString(0).toLong, x.getString(1).toLong,2)) ++ edgesTrain
-
-    val graphTest = Graph(u,edgesTest)
-
-
-    val newAttributesTest: VertexRDD[(Int, String,String,Vector,Vector,Array[Long],Int)] = graphTest.aggregateMessages[(Int,String, String,Vector,Vector,Array[Long],Int)](
-      triplet => { // Map Function
-        if(triplet.attr==1) {
-          triplet.sendToSrc((triplet.srcAttr._1, triplet.srcAttr._2, triplet.srcAttr._3, triplet.srcAttr._4,triplet.srcAttr._5, Array(triplet.dstId),0))
-          triplet.sendToDst((triplet.dstAttr._1, triplet.dstAttr._2, triplet.dstAttr._3, triplet.dstAttr._4,triplet.dstAttr._5, Array(triplet.srcId),1))
-        }else if(triplet.attr==0 || triplet.attr==2 ){
-          triplet.sendToSrc((triplet.srcAttr._1, triplet.srcAttr._2, triplet.srcAttr._3, triplet.srcAttr._4,triplet.srcAttr._5, Array[Long](),0))
-          triplet.sendToDst((triplet.dstAttr._1, triplet.dstAttr._2, triplet.dstAttr._3, triplet.dstAttr._4,triplet.dstAttr._5, Array[Long](),0))
-        }
-      },
-      (a,b)=>(a._1,a._2,a._3,a._4,a._5,a._6++b._6,a._7+b._7)
-    )
-    val updatedGraphTest=Graph(newAttributesTest,edgesTest)
-    val factsTest=updatedGraphTest.triplets
-    val readyRDDTest= factsTest.map(x=>(Row(x.srcId,x.srcAttr._1,x.srcAttr._2,x.srcAttr._3,x.srcAttr._4,x.srcAttr._5,x.srcAttr._6,x.srcAttr._7
-      ,x.dstId,x.dstAttr._1,x.dstAttr._2,x.dstAttr._3,x.dstAttr._4,x.dstAttr._5,x.dstAttr._6,x.dstAttr._7,x.attr)))
-    val aStructTest = new StructType(Array(StructField("Id1",LongType,nullable = true)
-      ,StructField("Year1",IntegerType,nullable = true)
-      ,StructField("Authors1",StringType,nullable = true)
-      ,StructField("Journal1",StringType,nullable = true)
-      ,StructField("fAbstract1",VectorType,nullable = true)
-      ,StructField("fTitle1",VectorType,nullable = true)
-      ,StructField("Neigh1",ArrayType(LongType,true),nullable = true)
-      ,StructField("InLinks1",IntegerType,nullable = true)
-      ,StructField("Id2",LongType,nullable = true)
-      ,StructField("Year2",IntegerType,nullable = true)
-      ,StructField("Authors2",StringType,nullable = true)
-      ,StructField("Journal2",StringType,nullable = true)
-      ,StructField("fAbstract2",VectorType,nullable = true)
-      ,StructField("fTitle2",VectorType,nullable = true)
-      ,StructField("Neigh2",ArrayType(LongType,true),nullable = true)
-      ,StructField("InLinks2",IntegerType,nullable = true)
-      ,StructField("label",IntegerType,nullable = true)))
-    //.toDF("Id1","Year1","Author1","Journal1","fAbstract1","fTitle1"
-    //,"Id2","Year2","Author2","Journal2","fAbstract2","fTitle2")
-    val readyDfTest = sparkSession.createDataFrame(readyRDDTest,aStructTest).filter($"label"===2)
-
-    val finalDfTest=readyDfTest.withColumn("Dist",cosinedist($"fAbstract1",$"fAbstract2"))
-      .withColumn("DistTitle",cosinedist($"fTitle1",$"fTitle2"))
-      .withColumn("YearDifference",difYear($"Year1",$"Year2"))
-      //.withColumn("sameAuthors",sAuthor($"Authors1",$"Authors2"))
-      .withColumn("Id",concat_ws(" ",$"Id1",$"Id2"))
-      //.withColumn("sameJournal", sJournal($"Journal1",$"Journal2"))
-      .withColumn("sameNeighbours",sNeighbours($"Neigh1",$"Neigh2"))
-      .withColumn("LinksDifference",inLinksDif($"InLinks2",$"InLinks1"))
-      .select("Id","label","Dist","YearDifference","DistTitle","sameNeighbours","LinksDifference")
-
-
-    //"Dist","DistTitle","sameAuthors","sameJournal","YearDifference","sameNeighbours"
-
-    val assembledFinalDfTest = assembler1.transform(finalDfTest).select("Id","featuresTemp","label")
+    val assembledFinalDfTest = assembler1.transform(testingDf).select("Id","featuresTemp","label")
 
     val scaledDataTest = scaler.transform(assembledFinalDfTest)
 
     val prediction=trained.transform(scaledDataTest)
-    val ntesting=testing
+    val ntesting=dfComSplitTest
       .withColumn("Idt",concat_ws(" ",$"Id1",$"Id2"))
-      .withColumn("trueLabel",testing.col("label").cast(IntegerType))
+      .withColumn("trueLabel",dfComSplitTest.col("label").cast(IntegerType))
       .select($"Idt",$"trueLabel")
+    //ntesting.show()
+    //prediction.show()
     val fPrediction= prediction.join(ntesting,$"Id"===$"Idt")
-    fPrediction.show()
+    //fPrediction.show()
     //decision tree model
     /*val dt = new DecisionTreeClassifier()
       .setLabelCol("label")
